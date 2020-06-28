@@ -24,6 +24,8 @@
 (require 's)
 (require 'request)
 (require 'json)
+(require 'eact)
+(require 'elquery)
 
 (eval-when-compile
   (require 'cl-lib))
@@ -167,29 +169,95 @@ Use pandoc by default because it can do sensible things with underscores in LaTe
         (anki-mode-menu-mode)
         (current-buffer))))
 
+(defun anki-mode-browse-deck (deck)
+  "Switch to a buffer with information on DECK."
+  (anki-mode-connect (lambda (res) (anki-mode--browse-deck-2 deck res))
+                     "findNotes"
+                     `(:query ,(concat "\"deck:" deck "\""))))
+
+(defun anki-mode--browse-deck-2 (deck ids)
+  "Get information on all notes in DECK with ids in IDS."
+  (anki-mode-connect (lambda (res) (anki-mode--browse-deck-3 deck res))
+                     "notesInfo"
+                     `(:notes ,(-uniq (anki-mode--vector-to-list ids)))))
+
+(defun anki-mode--field-width (list)
+  "Determine a human-readable width for a column containing text in LIST."
+  (let ((90th-percentile (nth (max 0 (floor (* 0.9 (1- (length list))))) (-sort '< list)))
+        (max (apply #'max list)))
+    (max 8 (if (> max (max (+ 5 90th-percentile) (* 1.5 90th-percentile))) 90th-percentile max))))
+
+(defun anki-mode--strip-html (value)
+  "Return VALUE with all HTML tags removed."
+  (elquery-full-text (car (elquery-$ "body > p" (elquery-read-string value))) " "))
+
+(defun anki-mode--browse-deck--render-table (notes-of-type)
+  "Return an eact template for a table containing all fields of NOTES-OF-TYPE."
+  (let* ((fields (-map (lambda (note) (alist-get 'fields note)) notes-of-type))
+         (names (->> (alist-get 'fields (car notes-of-type))
+                     (-sort (lambda (a b) (< (alist-get 'order (cdr a)) (alist-get 'order (cdr b)))))
+                     (-map 'car)))
+         (widths (->> names
+                      (-map (lambda (name) (cons (prin1-to-string name) (-map (lambda (field) (alist-get 'value (alist-get name field))) fields))))
+                      (-map (lambda (vals) (->> vals
+                                           (-map #'anki-mode--strip-html)
+                                           (-map #'string-width)
+                                           (anki-mode--field-width)))))))
+    (append (list (-zip-with (lambda (width name)
+                               (--> (prin1-to-string name)
+                                    (truncate-string-to-width it width nil ?  "…")
+                                    (s-concat it "  ")))
+                             widths names))
+            (-map (lambda (row) (-zip-with (lambda (width name)
+                                        (--> (alist-get name row)
+                                             (alist-get 'value it)
+                                             (anki-mode--strip-html it)
+                                             (truncate-string-to-width it width nil ?  "…")
+                                             (s-concat it "  ")))
+                                      widths names))
+                  fields))))
+
+(defun anki-mode--browse-deck-3 (deck notes)
+  "Switch to a buffer with information on DECK and a table of its NOTES."
+  (eact-render
+   (get-buffer-create (concat  "*Anki deck: " deck "*"))
+   `(("Anki Deck: " ,(prin1-to-string deck))
+     (,(s-repeat (length (concat "Anki Deck: " (prin1-to-string deck))) "="))
+     ("")
+     ("Some deck options will go here eventually")
+     ("")
+     ,@(let ((typed (--group-by (alist-get 'modelName it) (-map (lambda (it) it) notes))))
+         (car (-map (lambda (type-and-notes)
+                      (append (list (list "Cards of type: " (prin1-to-string (car type-and-notes))))
+                              (list (list (s-repeat (length (concat "Cards of type: " (prin1-to-string (car type-and-notes)))) "-")))
+                              (list (list ""))
+                            (anki-mode--browse-deck--render-table (cdr type-and-notes))))
+                    typed)))))
+  (switch-to-buffer (concat  "*Anki deck: " deck "*")))
+
 (defun anki-mode-menu-render ()
   "Render the Anki mode menu into the current buffer."
-  (let ((inhibit-read-only t))
-    (erase-buffer)
-    (insert "Anki Mode\n")
-    (insert "---------------\n")
-    (insert "[n]: New card\n")
-    (insert "[a]: New card with current settings (deck: '"
-            (or anki-mode--previous-deck "NULL")
-            "', card type: '"
-            (or anki-mode--previous-card-type "NULL")
-            "')\n")
-    (insert "[r]: Refresh decks list\n")
-    (insert "\n\n\n")
-    (insert "Decks\n")
-    (insert "---------------\n")
-    (--each anki-mode--decks (insert "* ") (insert it) (insert "\n"))))
+  (eact-render
+   (get-buffer-create "*Anki*")
+   `(("Anki Mode")
+     ("---------------")
+     ("[n]: New card")
+     ("[a]: New card with current settings: '"
+      ,(or anki-mode--previous-deck "NULL")
+      "', card type: '"
+      ,(or anki-mode--previous-card-type "NULL")
+      "'")
+     ("[r]: Refresh decks list\n")
+     ("Decks")
+     ("---------------")
+     ,@(-map (lambda (item) `("* " (,item :keymap ("RET" (lambda () (anki-mode-browse-deck ,item))))))
+             anki-mode--decks))))
 
 
 
 ;;; Anki-connect helpers
 
-(defun anki-mode-connect (callback method params sync)
+(defun anki-mode-connect (callback method params &optional sync)
   "Send a request to the anki-connect extension running inside Anki.
 
 Sends a request to run METHOD with the provided PARAMS.
