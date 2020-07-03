@@ -35,6 +35,46 @@
 
 
 
+(defgroup anki-mode nil
+  "Create and browse Anki decks"
+  :prefix "anki-mode-"
+  :link '(url-link :tag "Github" "https://github.com/davidshepherd7/anki-mode")
+  :link '(emacs-commentary-link :tag "Commentary" "anki-mode"))
+
+(defface anki-mode-hover-face
+  '((((class color) (min-colors 256) (background light)) :background "grey70")
+    (((class color) (min-colors 256) (background dark)) :background "grey30")
+    (((class color) (min-colors 8)) :background "black" :foreground "yellow"))
+  "Face for hovered elements in anki-mode TUIs."
+  :group 'anki-mode)
+
+(defface anki-mode-title-face
+  '((((supports :height :underline)) :underline t)
+    (((supports :underline)) :underline t))
+  "Face for title elements in anki-mode TUIs."
+  :group 'anki-mode)
+
+(defface anki-mode-header-face
+  '((((min-colors 256) (supports :weight) (background dark))
+     :foreground "LightGoldenrod2" :weight bold)
+    (((min-colors 256) (supports :weight) (background light))
+     :foreground "wheat4" :weight bold)
+    (((min-colors 256) (background dark))
+     :foreground "LightGoldenrod2" :weight bold)
+    (((min-colors 256) (background light))
+     :foreground "wheat4" :weight bold)
+    (((min-colors 8) (supports :weight) (background dark))
+     :foreground "yellow" :weight bold)
+    (((min-colors 8) (supports :weight) (background light))
+     :foreground "blue" :weight bold)
+    (((min-colors 8) (background dark))
+     :foreground "yellow")
+    (((min-colors 8) (background light))
+     :foreground "blue")
+    (((supports :weight)) :weight bold))
+  "Face for title elements in anki-mode TUIs."
+  :group 'anki-mode)
+
 (defvar anki-mode--required-anki-connect-version 6
   "Version of the anki connect plugin required.")
 
@@ -208,21 +248,26 @@ Use pandoc by default because it can do sensible things with underscores in LaTe
                                     (truncate-string-to-width it width nil ?  "…")
                                     (s-concat it "  ")))
                              widths names))
-            (-map (lambda (row) (-zip-with (lambda (width name)
-                                        (--> (alist-get name row)
-                                             (alist-get 'value it)
-                                             (anki-mode--strip-html it)
-                                             (truncate-string-to-width it width nil ?  "…")
-                                             (s-concat it "  ")))
-                                      widths names))
+            (-map (lambda (row)
+                    (list '(:hover anki-mode-hover-face)
+                          (-zip-with (lambda (width name)
+                                       (--> (alist-get name row)
+                                            (alist-get 'value it)
+                                            (anki-mode--strip-html it)
+                                            (truncate-string-to-width it width nil ?  "…")
+                                            (s-concat it "  ")))
+                                     widths names)))
                   fields))))
 
 (defun anki-mode--browse-deck-3 (deck notes)
   "Switch to a buffer with information on DECK and a table of its NOTES."
   (eact-render
    (get-buffer-create (concat  "*Anki deck: " deck "*"))
-   `(("Anki Deck: " ,(prin1-to-string deck))
-     (,(s-repeat (length (concat "Anki Deck: " (prin1-to-string deck))) "="))
+   `((((:face button :hover button :keymap ("RET" ,(lambda () (switch-to-buffer "*Anki*"))
+                                            "<mouse-1>" ,(lambda () (switch-to-buffer "*Anki*"))))
+       "[Back]")
+      " "
+      ((:face anki-mode-title-face) "Anki Deck: " ,(prin1-to-string deck)))
      ("")
      ("Some deck options will go here eventually")
      ("")
@@ -239,18 +284,20 @@ Use pandoc by default because it can do sensible things with underscores in LaTe
   "Render the Anki mode menu into the current buffer."
   (eact-render
    (get-buffer-create "*Anki*")
-   `(("Anki Mode")
-     ("---------------")
+   `((((:face anki-mode-title-face) "Anki Mode"))
      ("[n]: New card")
      ("[a]: New card with current settings: '"
       ,(or anki-mode--previous-deck "NULL")
       "', card type: '"
       ,(or anki-mode--previous-card-type "NULL")
       "'")
-     ("[r]: Refresh decks list\n")
-     ("Decks")
-     ("---------------")
-     ,@(-map (lambda (item) `("* " (,item :keymap ("RET" (lambda () (anki-mode-browse-deck ,item))))))
+     ("[r]: Refresh decks list")
+     ("")
+     (((:face anki-mode-header-face) "Decks") " (" ,(length anki-mode--decks) ")")
+     ,@(-map (lambda (item) `((:hover anki-mode-hover-face
+                          :keymap ,`("RET" (lambda () (anki-mode-browse-deck ,item))
+                                     "<mouse-1>" (lambda () (anki-mode-browse-deck ,item))))
+                         ,(list "- " item)))
              anki-mode--decks))))
 
 
